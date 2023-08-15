@@ -73,9 +73,9 @@ struct Manager::WriterInfo {
     bool hook_initialized = false;
     string instantiating_filter;
 
-    telemetry::IntCounter total_writes;
+    std::shared_ptr<telemetry::IntCounter> total_writes;
 
-    WriterInfo(telemetry::IntCounter total_writes) : total_writes(total_writes) {}
+    WriterInfo(std::shared_ptr<telemetry::IntCounter> total_writes) : total_writes(total_writes) {}
 };
 
 struct Manager::Stream {
@@ -94,7 +94,7 @@ struct Manager::Stream {
 
     bool enable_remote = false;
 
-    std::optional<telemetry::IntCounter> total_writes; // Initialized on first write.
+    std::shared_ptr<telemetry::IntCounter> total_writes; // Initialized on first write.
 
     ~Stream();
 };
@@ -676,7 +676,7 @@ bool Manager::Write(EnumVal* id, RecordVal* columns_arg) {
     if ( ! stream->total_writes ) {
         std::string module_name = detail::extract_module_name(stream->name.c_str());
         std::initializer_list<telemetry::LabelView> labels{{"module", module_name}, {"stream", stream->name}};
-        stream->total_writes = total_log_stream_writes_family.GetOrAdd(labels);
+        stream->total_writes = total_log_stream_writes_family->GetOrAdd(labels);
     }
 
     stream->total_writes->Inc();
@@ -855,7 +855,7 @@ bool Manager::Write(EnumVal* id, RecordVal* columns_arg) {
         }
 
         assert(w != stream->writers.end());
-        w->second->total_writes.Inc();
+        w->second->total_writes->Inc();
 
         // Write takes ownership of vals.
         assert(writer);
@@ -1095,7 +1095,7 @@ WriterFrontend* Manager::CreateWriter(EnumVal* id, EnumVal* writer, WriterBacken
                                                        {"filter-name", instantiating_filter},
                                                        {"path", info->path}};
 
-    WriterInfo* winfo = new WriterInfo(zeek::log_mgr->total_log_writer_writes_family.GetOrAdd(labels));
+    WriterInfo* winfo = new WriterInfo(zeek::log_mgr->total_log_writer_writes_family->GetOrAdd(labels));
     winfo->type = writer->Ref()->AsEnumVal();
     winfo->writer = nullptr;
     winfo->open_time = run_state::network_time;
