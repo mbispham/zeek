@@ -45,6 +45,14 @@ using namespace std;
 
 namespace zeek {
 
+static size_t hash_combine(size_t h1, size_t h2) {
+    // Taken from Boost.  See for example
+    // https://www.boost.org/doc/libs/1_35_0/doc/html/boost/hash_combine_id241013.html
+    // or
+    // https://stackoverflow.com/questions/4948780/magic-number-in-boosthash-combine
+    return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
+}
+
 Val::~Val() {
 #ifdef DEBUG
     delete[] bound_id;
@@ -1175,6 +1183,11 @@ ValPtr StringVal::DoClone(CloneState* state) {
                                      new String((u_char*)string_val->Bytes(), string_val->Len(), true)));
 }
 
+bool StringVal::IsSameAs(const Val& other) const {
+    auto so = other.AsStringVal();
+    return so && Bstr_eq(string_val, so->string_val);
+}
+
 FuncVal::FuncVal(FuncPtr f) : Val(f->GetType()) { func_val = std::move(f); }
 
 FuncPtr FuncVal::AsFuncPtr() const { return func_val; }
@@ -1340,6 +1353,35 @@ unsigned int ListVal::ComputeFootprint(std::unordered_set<const Val*>* analyzed_
         fp += val->Footprint(analyzed_vals);
 
     return fp;
+}
+
+bool ListVal::IsSameAs(const Val& other) const {
+    // This will type-check the object as well.
+    auto lo = (&other)->AsListVal();
+
+    if ( ! lo || vals.size() != lo->vals.size() )
+        return false;
+
+    for ( size_t i = 0; i < vals.size(); i++ )
+        if ( ! vals[i]->IsSameAs(*(lo->vals[i])) )
+            return false;
+
+    return true;
+}
+
+std::size_t ListVal::Hash() const {
+    size_t hash = 0;
+
+    for ( const auto& v : vals )
+        hash = hash_combine(hash, v->Hash());
+
+    return hash;
+}
+
+size_t ListValHasher::operator()(const zeek::IntrusivePtr<zeek::ListVal>& val) const noexcept { return val->Hash(); }
+
+bool ListValEqualTo::operator()(const IntrusivePtr<ListVal>& a, const IntrusivePtr<ListVal>& b) const noexcept {
+    return a->IsSameAs(*b);
 }
 
 TableEntryVal* TableEntryVal::Clone(Val::CloneState* state) {
@@ -2888,6 +2930,48 @@ unsigned int RecordVal::ComputeFootprint(std::unordered_set<const Val*>* analyze
     return fp;
 }
 
+size_t RecordVal::Hash() const {
+    size_t hash = 0;
+
+    int num_fields = rt->NumFields();
+    for ( int i = 0; i < num_fields; ++i ) {
+        auto rv_i = GetField(i);
+
+        detail::Attributes* a = rt->FieldDecl(i)->attrs.get();
+        bool optional_attr = (a && a->Find(detail::ATTR_OPTIONAL));
+
+        if ( ! rv_i || optional_attr )
+            continue;
+
+        hash = hash_combine(hash, rv_i->Hash());
+    }
+
+    return hash;
+}
+
+bool RecordVal::IsSameAs(const Val& other) const {
+    auto ro = (&other)->AsRecordVal();
+
+    if ( ! ro || NumFields() != ro->NumFields() )
+        return false;
+
+    for ( size_t i = 0; i < NumFields(); i++ ) {
+        if ( HasField(i) != ro->HasField(i) )
+            return false;
+
+        auto f = GetField(i);
+        auto of = ro->GetField(i);
+
+        if ( ! f && ! of )
+            continue;
+
+        if ( ! f || ! of || ! f->IsSameAs(*of) )
+            return false;
+    }
+
+    return true;
+}
+
 ValPtr EnumVal::SizeVal() const { return val_mgr->Int(AsInt()); }
 
 void EnumVal::ValDescribe(ODesc* d) const {
@@ -2902,6 +2986,12 @@ void EnumVal::ValDescribe(ODesc* d) const {
 ValPtr EnumVal::DoClone(CloneState* state) {
     // Immutable.
     return {NewRef{}, this};
+}
+
+bool EnumVal::IsSameAs(const Val& other) const {
+    auto eo = other.AsEnumVal();
+
+    return eo && type == eo->type && int_val == eo->int_val;
 }
 
 void TypeVal::ValDescribe(ODesc* d) const { d->Add(type->AsTypeType()->GetType()->GetName()); }
