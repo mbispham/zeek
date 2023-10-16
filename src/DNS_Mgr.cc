@@ -600,7 +600,7 @@ void DNS_Mgr::InitSource()
 	// Enable an EDNS option to be sent with the requests. This allows us to set
 	// a bigger UDP buffer size in the request, which prevents fallback to TCP
 	// at least up to that size.
-	options.flags = ARES_FLAG_EDNS | ARES_FLAG_STAYOPEN;
+	options.flags = ARES_FLAG_EDNS | ARES_FLAG_STAYOPEN | ARES_FLAG_USEVC;
 	optmask |= ARES_OPT_FLAGS;
 
 	options.ednspsz = MAX_UDP_BUFFER_SIZE;
@@ -1022,6 +1022,9 @@ void DNS_Mgr::Resolve()
 
 		// poll() timeout is in milliseconds.
 		tvp = ares_timeout(channel, &tv, &tv);
+		if ( ! tvp )
+			break;
+
 		int timeout_ms = tvp->tv_sec * 1000 + tvp->tv_usec / 1000;
 
 		int res = poll(pollfds, nfds, timeout_ms);
@@ -1491,6 +1494,8 @@ double DNS_Mgr::GetNextTimeout()
 	tv.tv_usec = 0;
 
 	struct timeval* tvp = ares_timeout(channel, &tv, &tv);
+	if ( ! tvp )
+		return -1;
 
 	return static_cast<double>(tvp->tv_sec) + (static_cast<double>(tvp->tv_usec) / 1e6);
 	}
@@ -1776,6 +1781,16 @@ TEST_CASE("dns_mgr default mode" * doctest::skip(true))
 	addr_result = mgr.LookupAddr(bad);
 	REQUIRE(addr_result != nullptr);
 	CHECK(strcmp(addr_result->CheckString(), "240.0.0.0") == 0);
+	}
+
+TEST_CASE("dns_mgr stayopen" * doctest::skip(true))
+	{
+	TestDNS_Mgr mgr(DNS_DEFAULT);
+	mgr.InitPostScript();
+
+	IPAddr ones4("17.253.144.10");
+	auto addr_result = mgr.LookupAddr(ones4);
+	REQUIRE(addr_result != nullptr);
 	}
 
 TEST_CASE("dns_mgr async host" * doctest::skip(true))
