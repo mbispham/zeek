@@ -600,7 +600,7 @@ void DNS_Mgr::InitSource()
 	// Enable an EDNS option to be sent with the requests. This allows us to set
 	// a bigger UDP buffer size in the request, which prevents fallback to TCP
 	// at least up to that size.
-	options.flags = ARES_FLAG_EDNS;
+	options.flags = ARES_FLAG_EDNS | ARES_FLAG_STAYOPEN;
 	optmask |= ARES_OPT_FLAGS;
 
 	options.ednspsz = MAX_UDP_BUFFER_SIZE;
