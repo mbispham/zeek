@@ -171,14 +171,15 @@ public:
      */
     template<class ValueType = int64_t>
     auto CounterFamily(std::string_view prefix, std::string_view name, Span<const std::string_view> labels,
-                       std::string_view helptext, std::string_view unit = "1", bool is_sum = false) {
+                       std::string_view helptext, std::string_view unit = "1", bool is_sum = false,
+                       opentelemetry::metrics::ObservableCallbackPtr callback = nullptr) {
         auto fam = LookupFamily(prefix, name);
 
         if constexpr ( std::is_same<ValueType, int64_t>::value ) {
             if ( fam )
                 return std::static_pointer_cast<IntCounterFamily>(fam);
 
-            auto int_fam = std::make_shared<IntCounterFamily>(prefix, name, labels, helptext, unit, is_sum);
+            auto int_fam = std::make_shared<IntCounterFamily>(prefix, name, labels, helptext, unit, is_sum, callback);
             families.push_back(int_fam);
             return int_fam;
         }
@@ -188,7 +189,7 @@ public:
             if ( fam )
                 return std::static_pointer_cast<DblCounterFamily>(fam);
 
-            auto dbl_fam = std::make_shared<DblCounterFamily>(prefix, name, labels, helptext, unit, is_sum);
+            auto dbl_fam = std::make_shared<DblCounterFamily>(prefix, name, labels, helptext, unit, is_sum, callback);
             families.push_back(dbl_fam);
             return dbl_fam;
         }
@@ -197,9 +198,10 @@ public:
     /// @copydoc CounterFamily
     template<class ValueType = int64_t>
     auto CounterFamily(std::string_view prefix, std::string_view name, std::initializer_list<std::string_view> labels,
-                       std::string_view helptext, std::string_view unit = "1", bool is_sum = false) {
+                       std::string_view helptext, std::string_view unit = "1", bool is_sum = false,
+                       opentelemetry::metrics::ObservableCallbackPtr callback = nullptr) {
         auto lbl_span = Span{labels.begin(), labels.size()};
-        return CounterFamily<ValueType>(prefix, name, lbl_span, helptext, unit, is_sum);
+        return CounterFamily<ValueType>(prefix, name, lbl_span, helptext, unit, is_sum, callback);
     }
 
     /**
@@ -410,6 +412,8 @@ public:
         auto lbls = Span{labels.begin(), labels.size()};
         return HistogramInstance(prefix, name, lbls, default_upper_bounds, helptext, unit, is_sum);
     }
+
+    static void FetchSystemStats(opentelemetry::metrics::ObserverResult observer_result, void* state);
 
 protected:
     template<class F>
