@@ -51,29 +51,31 @@ CPPLambdaFunc::CPPLambdaFunc(string _name, FuncTypePtr ft, CPPStmtPtr _l_body)
 	l_body = std::move(_l_body);
 	}
 
-broker::expected<broker::data> CPPLambdaFunc::SerializeCaptures() const
+std::optional<BrokerData> CPPLambdaFunc::SerializeCaptures() const
 	{
+	static constexpr std::string_view name = "CopyFrame";
+
 	auto vals = l_body->SerializeLambdaCaptures();
 
-	broker::vector rval;
-	rval.emplace_back(string("CopyFrame"));
-
-	broker::vector body;
+	BrokerListBuilder body_builder;
+	body_builder.Reserve(vals.size());
 
 	for ( const auto& val : vals )
 		{
-		auto expected = Broker::detail::val_to_data(val.get());
-		if ( ! expected )
-			return broker::ec::invalid_data;
+		BrokerData tmp;
+		if ( ! tmp.Convert(val) )
+			return std::nullopt;
 
 		TypeTag tag = val->GetType()->Tag();
-		broker::vector val_tuple{std::move(*expected), static_cast<broker::integer>(tag)};
-		body.emplace_back(std::move(val_tuple));
+		body_builder.AddList(std::move(tmp), static_cast<int64_t>(tag));
 		}
 
-	rval.emplace_back(std::move(body));
+	BrokerListBuilder result_builder;
+	result_builder.Reserve(2);
+	result_builder.AddString(name.data(), name.size());
+	result_builder.Add(std::move(body_builder));
 
-	return {std::move(rval)};
+	return {std::move(result_builder).Build()};
 	}
 
 void CPPLambdaFunc::SetCaptures(Frame* f)

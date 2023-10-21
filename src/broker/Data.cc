@@ -45,6 +45,19 @@ TEST_CASE("converting Zeek to Broker protocol constants")
 	CHECK_EQ(to_broker_port_proto(TRANSPORT_UNKNOWN), broker::port::protocol::unknown);
 	}
 
+namespace zeek
+	{
+
+class BrokerDataAccess
+	{
+public:
+	static broker::data& Unbox(BrokerData& data) { return data.value_; }
+
+	static broker::data&& Unbox(BrokerData&& data) { return std::move(data.value_); }
+	};
+
+	} // namespace zeek
+
 namespace zeek::Broker::detail
 	{
 
@@ -255,8 +268,8 @@ struct val_converter
 
 			for ( size_t i = 0; i < indices->size(); ++i )
 				{
-				auto index_val = data_to_val(std::move((*indices)[i]),
-				                             expected_index_types[i].get());
+				auto val = (*indices)[i]; // Must copy, because std::set has only immutable access.
+				auto index_val = data_to_val(val, expected_index_types[i].get());
 
 				if ( ! index_val )
 					return nullptr;
@@ -311,8 +324,8 @@ struct val_converter
 
 			for ( size_t i = 0; i < indices->size(); ++i )
 				{
-				auto index_val = data_to_val(std::move((*indices)[i]),
-				                             expected_index_types[i].get());
+				auto val = (*indices)[i]; // Must copy, because the key is immutable.
+				auto index_val = data_to_val(val, expected_index_types[i].get());
 
 				if ( ! index_val )
 					return nullptr;
@@ -320,7 +333,7 @@ struct val_converter
 				list_val->Append(std::move(index_val));
 				}
 
-			auto value_val = data_to_val(std::move(item.second), tt->Yield().get());
+			auto value_val = data_to_val(item.second, tt->Yield().get());
 
 			if ( ! value_val )
 				return nullptr;
@@ -340,7 +353,7 @@ struct val_converter
 
 			for ( auto& item : a )
 				{
-				auto item_val = data_to_val(std::move(item), vt->Yield().get());
+				auto item_val = data_to_val(item, vt->Yield().get());
 
 				if ( ! item_val )
 					return nullptr;
@@ -366,7 +379,7 @@ struct val_converter
 			unsigned int pos = 0;
 			for ( auto& item : a )
 				{
-				auto item_val = data_to_val(std::move(item),
+				auto item_val = data_to_val(item,
 				                            pure ? lt->GetPureType().get() : types[pos].get());
 				pos++;
 
@@ -419,7 +432,7 @@ struct val_converter
 					return nullptr;
 
 				auto* b = dynamic_cast<zeek::detail::ScriptFunc*>(rval->AsFunc());
-				if ( ! b || ! b->DeserializeCaptures(*frame) )
+				if ( ! b || ! b->DeserializeCaptures(BrokerListView{frame}) )
 					return nullptr;
 				}
 
@@ -443,7 +456,7 @@ struct val_converter
 					continue;
 					}
 
-				auto item_val = data_to_val(std::move(a[idx]), rt->GetFieldType(i).get());
+				auto item_val = data_to_val(a[idx], rt->GetFieldType(i).get());
 
 				if ( ! item_val )
 					return nullptr;
@@ -479,7 +492,7 @@ struct val_converter
 			return rval;
 			}
 		else if ( type->Tag() == TYPE_OPAQUE )
-			return OpaqueVal::Unserialize(a);
+			return OpaqueVal::Unserialize(BrokerListView{&a});
 
 		return nullptr;
 		}
@@ -797,7 +810,8 @@ struct type_checker
 			{
 			// TODO: Could avoid doing the full unserialization here
 			// and just check if the type is a correct match.
-			auto ov = OpaqueVal::Unserialize(a);
+			auto cpy = a;
+			auto ov = OpaqueVal::Unserialize(BrokerListView{&cpy});
 			return ov != nullptr;
 			}
 
@@ -813,15 +827,18 @@ static bool data_type_check(const broker::data& d, Type* t)
 	return visit(type_checker{t}, d);
 	}
 
-ValPtr data_to_val(broker::data d, Type* type)
+ValPtr data_to_val(broker::data& d, Type* type)
 	{
 	if ( type->Tag() == TYPE_ANY )
-		return make_data_val(std::move(d));
+		{
+		BrokerData tmp{std::move(d)};
+		return std::move(tmp).ToRecordVal();
+		}
 
 	return visit(val_converter{type}, d);
 	}
 
-broker::expected<broker::data> val_to_data(const Val* v)
+std::optional<broker::data> val_to_data(const Val* v)
 	{
 	switch ( v->GetType()->Tag() )
 		{
@@ -898,14 +915,14 @@ broker::expected<broker::data> val_to_data(const Val* v)
 					{
 					auto bc = b->SerializeCaptures();
 					if ( ! bc )
-						return broker::ec::invalid_data;
+						return std::nullopt;
 
-					rval.emplace_back(std::move(*bc));
+					rval.emplace_back(std::move(BrokerDataAccess::Unbox(*bc)));
 					}
 				else
 					{
 					reporter->InternalWarning("Closure with non-ScriptFunc");
-					return broker::ec::invalid_data;
+					return std::nullopt;
 					}
 				}
 
@@ -936,7 +953,7 @@ broker::expected<broker::data> val_to_data(const Val* v)
 					auto key_part = val_to_data(vl->Idx(k).get());
 
 					if ( ! key_part )
-						return broker::ec::invalid_data;
+						return std::nullopt;
 
 					composite_key.emplace_back(std::move(*key_part));
 					}
@@ -955,7 +972,7 @@ broker::expected<broker::data> val_to_data(const Val* v)
 					auto val = val_to_data(te.value->GetVal().get());
 
 					if ( ! val )
-						return broker::ec::invalid_data;
+						return std::nullopt;
 
 					get<broker::table>(rval).emplace(std::move(key), std::move(*val));
 					}
@@ -979,7 +996,7 @@ broker::expected<broker::data> val_to_data(const Val* v)
 				auto item = val_to_data(item_val.get());
 
 				if ( ! item )
-					return broker::ec::invalid_data;
+					return std::nullopt;
 
 				rval.emplace_back(std::move(*item));
 				}
@@ -1004,7 +1021,7 @@ broker::expected<broker::data> val_to_data(const Val* v)
 				auto item = val_to_data(item_val.get());
 
 				if ( ! item )
-					return broker::ec::invalid_data;
+					return std::nullopt;
 
 				rval.emplace_back(std::move(*item));
 				}
@@ -1031,7 +1048,7 @@ broker::expected<broker::data> val_to_data(const Val* v)
 				auto item = val_to_data(item_val.get());
 
 				if ( ! item )
-					return broker::ec::invalid_data;
+					return std::nullopt;
 
 				rval.emplace_back(std::move(*item));
 				}
@@ -1053,14 +1070,14 @@ broker::expected<broker::data> val_to_data(const Val* v)
 				break;
 				}
 
-			return {c};
+			return {BrokerDataAccess::Unbox(std::move(*c))};
 			}
 		default:
 			reporter->Error("unsupported Broker::Data type: %s", type_name(v->GetType()->Tag()));
 			break;
 		}
 
-	return broker::ec::invalid_data;
+	return std::nullopt;
 	}
 
 RecordValPtr make_data_val(Val* v)
@@ -1208,27 +1225,27 @@ const TypePtr& DataVal::ScriptDataType()
 
 IMPLEMENT_OPAQUE_VALUE(zeek::Broker::detail::DataVal)
 
-broker::expected<broker::data> DataVal::DoSerialize() const
+std::optional<BrokerData> DataVal::DoSerialize() const
 	{
-	return data;
+	return {BrokerData{std::move(data)}};
 	}
 
-bool DataVal::DoUnserialize(const broker::data& data_)
+bool DataVal::DoUnserialize(BrokerDataView dv)
 	{
-	data = data_;
+	data = std::move(*dv.value_);
 	return true;
 	}
 
 IMPLEMENT_OPAQUE_VALUE(zeek::Broker::detail::SetIterator)
 
-broker::expected<broker::data> SetIterator::DoSerialize() const
+std::optional<BrokerData> SetIterator::DoSerialize() const
 	{
-	return broker::vector{dat, *it};
+	return {BrokerData{broker::data{broker::vector{dat, *it}}}};
 	}
 
-bool SetIterator::DoUnserialize(const broker::data& data)
+bool SetIterator::DoUnserialize(BrokerDataView data)
 	{
-	auto v = get_if<broker::vector>(&data);
+	auto v = get_if<broker::vector>(data.value_);
 	if ( ! (v && v->size() == 2) )
 		return false;
 
@@ -1248,14 +1265,14 @@ bool SetIterator::DoUnserialize(const broker::data& data)
 
 IMPLEMENT_OPAQUE_VALUE(zeek::Broker::detail::TableIterator)
 
-broker::expected<broker::data> TableIterator::DoSerialize() const
+std::optional<BrokerData> TableIterator::DoSerialize() const
 	{
-	return broker::vector{dat, it->first};
+	return {BrokerData{broker::data{broker::vector{dat, it->first}}}};
 	}
 
-bool TableIterator::DoUnserialize(const broker::data& data)
+bool TableIterator::DoUnserialize(BrokerDataView data)
 	{
-	auto v = get_if<broker::vector>(&data);
+	auto v = get_if<broker::vector>(data.value_);
 	if ( ! (v && v->size() == 2) )
 		return false;
 
@@ -1275,15 +1292,15 @@ bool TableIterator::DoUnserialize(const broker::data& data)
 
 IMPLEMENT_OPAQUE_VALUE(zeek::Broker::detail::VectorIterator)
 
-broker::expected<broker::data> VectorIterator::DoSerialize() const
+std::optional<BrokerData> VectorIterator::DoSerialize() const
 	{
 	broker::integer difference = it - dat.begin();
-	return broker::vector{dat, difference};
+	return {BrokerData{broker::data{broker::vector{dat, difference}}}};
 	}
 
-bool VectorIterator::DoUnserialize(const broker::data& data)
+bool VectorIterator::DoUnserialize(BrokerDataView data)
 	{
-	auto v = get_if<broker::vector>(&data);
+	auto v = get_if<broker::vector>(data.value_);
 	if ( ! (v && v->size() == 2) )
 		return false;
 
@@ -1300,15 +1317,15 @@ bool VectorIterator::DoUnserialize(const broker::data& data)
 
 IMPLEMENT_OPAQUE_VALUE(zeek::Broker::detail::RecordIterator)
 
-broker::expected<broker::data> RecordIterator::DoSerialize() const
+std::optional<BrokerData> RecordIterator::DoSerialize() const
 	{
 	broker::integer difference = it - dat.begin();
-	return broker::vector{dat, difference};
+	return BrokerData{broker::data{broker::vector{dat, difference}}};
 	}
 
-bool RecordIterator::DoUnserialize(const broker::data& data)
+bool RecordIterator::DoUnserialize(BrokerDataView data)
 	{
-	auto v = get_if<broker::vector>(&data);
+	auto v = get_if<broker::vector>(data.value_);
 	if ( ! (v && v->size() == 2) )
 		return false;
 
@@ -1362,3 +1379,58 @@ threading::Field* data_to_threading_field(broker::data d)
 	}
 
 	} // namespace zeek::Broker::detail
+
+namespace zeek
+	{
+
+[[nodiscard]] BrokerListView BrokerDataView::ToList() noexcept
+	{
+	return BrokerListView{std::addressof(broker::get<broker::vector>(*value_))};
+	}
+
+[[nodiscard]] ValPtr BrokerDataView::ToVal(Type* type)
+	{
+	return zeek::Broker::detail::data_to_val(*value_, type);
+	}
+
+[[nodiscard]] bool BrokerData::Convert(const Val* value)
+	{
+	if ( auto res = zeek::Broker::detail::val_to_data(value) )
+		{
+		value_ = std::move(*res);
+		return true;
+		}
+	return false;
+	}
+
+[[nodiscard]] RecordValPtr BrokerData::ToRecordVal() &&
+	{
+	auto rval = make_intrusive<RecordVal>(BifType::Record::Broker::Data);
+	rval->Assign(0, make_intrusive<zeek::Broker::detail::DataVal>(std::move(value_)));
+	return rval;
+	}
+
+[[nodiscard]] RecordValPtr BrokerData::ToRecordVal(const Val* v)
+	{
+	auto rval = make_intrusive<RecordVal>(BifType::Record::Broker::Data);
+
+	BrokerData tmp;
+	if ( tmp.Convert(v) )
+		rval->Assign(0, make_intrusive<zeek::Broker::detail::DataVal>(std::move(tmp.value_)));
+	else
+		reporter->Warning("did not get a value from val_to_data");
+
+	return rval;
+	}
+
+[[nodiscard]] bool BrokerListBuilder::Add(const Val* value)
+	{
+	if ( auto res = zeek::Broker::detail::val_to_data(value) )
+		{
+		values_.emplace_back(std::move(*res));
+		return true;
+		}
+	return false;
+	}
+
+	} // namespace zeek

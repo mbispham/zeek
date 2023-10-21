@@ -4,14 +4,15 @@
 
 #include "zeek/zeek-config.h"
 
-#include <broker/expected.hh>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
-namespace broker
+namespace zeek
 	{
-class data;
+class BrokerData;
+class BrokerDataView;
 	}
 
 namespace zeek::probabilistic::detail
@@ -152,8 +153,8 @@ public:
 	 */
 	uint64_t Hash() const;
 
-	broker::expected<broker::data> Serialize() const;
-	static std::unique_ptr<CounterVector> Unserialize(const broker::data& data);
+	std::optional<BrokerData> Serialize() const;
+	static std::unique_ptr<CounterVector> Unserialize(BrokerDataView data);
 
 protected:
 	friend CounterVector operator|(const CounterVector& x, const CounterVector& y);

@@ -26,6 +26,16 @@ EnumValPtr query_status(bool success)
 	return rval;
 	}
 
+void StoreHandleVal::Put(BrokerData&& key, BrokerData&& value, std::optional<BrokerTimespan> expiry)
+	{
+	store.put(std::move(key).value_, std::move(value).value_, expiry);
+	}
+
+void StoreHandleVal::Erase(BrokerData&& key)
+	{
+	store.erase(std::move(key).value_);
+	}
+
 void StoreHandleVal::ValDescribe(ODesc* d) const
 	{
 	d->Add("broker::store::");
@@ -38,13 +48,13 @@ void StoreHandleVal::ValDescribe(ODesc* d) const
 
 IMPLEMENT_OPAQUE_VALUE(StoreHandleVal)
 
-broker::expected<broker::data> StoreHandleVal::DoSerialize() const
+std::optional<BrokerData> StoreHandleVal::DoSerialize() const
 	{
 	// Cannot serialize.
-	return broker::ec::invalid_data;
+	return std::nullopt;
 	}
 
-bool StoreHandleVal::DoUnserialize(const broker::data& data)
+bool StoreHandleVal::DoUnserialize(BrokerDataView)
 	{
 	// Cannot unserialize.
 	return false;

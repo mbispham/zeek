@@ -20,25 +20,21 @@
 #include "zeek/Reporter.h"
 #include "zeek/Scope.h"
 #include "zeek/Var.h"
+#include "zeek/broker/Data.h"
 #include "zeek/probabilistic/BloomFilter.h"
 #include "zeek/probabilistic/CardinalityCounter.h"
 
 namespace zeek
 	{
 
-// Helper to retrieve a broker value out of a broker::vector at a specified
-// index, and casted to the expected destination type.
-template <typename S, typename V, typename D>
-inline bool get_vector_idx(const V& v, unsigned int i, D* dst)
+// Helper to retrieve a broker count out of a list at a specified index, and
+// casted to the expected destination type.
+template <typename V, typename D> inline bool get_vector_idx(V& v, size_t i, D* dst)
 	{
-	if ( i >= v.size() )
+	if ( i >= v.Size() || ! v[i].IsCount() )
 		return false;
 
-	auto x = broker::get_if<S>(&v[i]);
-	if ( ! x )
-		return false;
-
-	*dst = static_cast<D>(*x);
+	*dst = static_cast<D>(v[i].ToCount());
 	return true;
 	}
 
@@ -67,71 +63,85 @@ OpaqueValPtr OpaqueMgr::Instantiate(const std::string& id) const
 	return x != _types.end() ? (*x->second)() : nullptr;
 	}
 
-broker::expected<broker::data> OpaqueVal::Serialize() const
+std::optional<BrokerData> OpaqueVal::Serialize() const
 	{
 	auto type = OpaqueMgr::mgr()->TypeID(this);
 
 	auto d = DoSerialize();
 	if ( ! d )
-		return d.error();
+		return std::nullopt;
 
-	return {broker::vector{std::move(type), std::move(*d)}};
+	BrokerListBuilder builder;
+	builder.Add(std::move(type));
+	builder.Add(std::move(*d));
+	return {std::move(builder).Build()};
 	}
 
-OpaqueValPtr OpaqueVal::Unserialize(const broker::data& data)
+OpaqueValPtr OpaqueVal::Unserialize(BrokerDataView data)
 	{
-	auto v = broker::get_if<broker::vector>(&data);
-
-	if ( ! (v && v->size() == 2) )
+	if ( ! data.IsList() )
 		return nullptr;
 
-	auto type = broker::get_if<std::string>(&(*v)[0]);
-	if ( ! type )
+	return Unserialize(data.ToList());
+	}
+
+OpaqueValPtr OpaqueVal::Unserialize(BrokerListView v)
+	{
+	if ( v.Size() != 2 || ! v[0].IsString() )
 		return nullptr;
 
-	auto val = OpaqueMgr::mgr()->Instantiate(*type);
+	auto type = v[0].ToString();
+
+	auto val = OpaqueMgr::mgr()->Instantiate(std::string{type});
 	if ( ! val )
 		return nullptr;
 
-	if ( ! val->DoUnserialize((*v)[1]) )
+	if ( ! val->DoUnserialize(v[1]) )
 		return nullptr;
 
 	return val;
 	}
 
-broker::expected<broker::data> OpaqueVal::SerializeType(const TypePtr& t)
+std::optional<BrokerData> OpaqueVal::SerializeType(const TypePtr& t)
 	{
 	if ( t->InternalType() == TYPE_INTERNAL_ERROR )
-		return broker::ec::invalid_data;
+		return std::nullopt;
+
+	BrokerListBuilder builder;
 
 	if ( t->InternalType() == TYPE_INTERNAL_OTHER )
 		{
 		// Serialize by name.
-		assert(t->GetName().size());
-		return {broker::vector{true, t->GetName()}};
+		assert(! t->GetName().empty());
+		builder.Add(true);
+		builder.Add(t->GetName());
+		}
+	else
+		{
+		// A base type.
+		builder.Add(false);
+		builder.Add(static_cast<uint64_t>(t->Tag()));
 		}
 
-	// A base type.
-	return {broker::vector{false, static_cast<uint64_t>(t->Tag())}};
+	return {std::move(builder).Build()};
 	}
 
-TypePtr OpaqueVal::UnserializeType(const broker::data& data)
+TypePtr OpaqueVal::UnserializeType(BrokerDataView data)
 	{
-	auto v = broker::get_if<broker::vector>(&data);
-	if ( ! (v && v->size() == 2) )
+	if ( ! data.IsList() )
 		return nullptr;
 
-	auto by_name = broker::get_if<bool>(&(*v)[0]);
-	if ( ! by_name )
+	auto v = data.ToList();
+
+	if ( v.Size() != 2 || ! v[0].IsBool() )
 		return nullptr;
 
-	if ( *by_name )
+	if ( v[0].ToBool() ) // Get by name?
 		{
-		auto name = broker::get_if<std::string>(&(*v)[1]);
-		if ( ! name )
+		if ( ! v[1].IsString() )
 			return nullptr;
 
-		const auto& id = detail::global_scope()->Find(*name);
+		const auto& id = detail::global_scope()->Find(v[1].ToString());
 		if ( ! id )
 			return nullptr;
 
@@ -141,11 +151,10 @@ TypePtr OpaqueVal::UnserializeType(const broker::data& data)
 		return id->GetType();
 		}
 
-	auto tag = broker::get_if<uint64_t>(&(*v)[1]);
-	if ( ! tag )
+	if ( ! v[1].IsCount() )
 		return nullptr;
 
-	return base_type(static_cast<TypeTag>(*tag));
+	return base_type(static_cast<TypeTag>(v[1].ToCount()));
 	}
 
 ValPtr OpaqueVal::DoClone(CloneState* state)
@@ -154,7 +163,7 @@ ValPtr OpaqueVal::DoClone(CloneState* state)
 	if ( ! d )
 		return nullptr;
 
-	auto rval = OpaqueVal::Unserialize(std::move(*d));
+	auto rval = OpaqueVal::Unserialize(d->AsView());
 	return state->NewClone(this, std::move(rval));
 	}
 
@@ -316,10 +325,15 @@ StringValPtr MD5Val::DoGet()
 
 IMPLEMENT_OPAQUE_VALUE(MD5Val)
 
-broker::expected<broker::data> MD5Val::DoSerialize() const
+std::optional<BrokerData> MD5Val::DoSerialize() const
 	{
+	BrokerListBuilder builder;
+
 	if ( ! IsValid() )
-		return {broker::vector{false}};
+		{
+		builder.Add(false);
+		return {std::move(builder).Build()};
+		}
 
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
 	MD5_CTX* md = (MD5_CTX*)EVP_MD_CTX_md_data(ctx);
@@ -328,46 +342,41 @@ broker::expected<broker::data> MD5Val::DoSerialize() const
 	auto data = std::string(reinterpret_cast<const char*>(&ctx), sizeof(ctx));
 #endif
 
-	broker::vector d = {true, data};
-	return {std::move(d)};
+	builder.Add(true);
+	builder.Add(std::move(data));
+	return {std::move(builder).Build()};
 	}
 
-bool MD5Val::DoUnserialize(const broker::data& data)
+bool MD5Val::DoUnserialize(BrokerDataView data)
 	{
-	auto d = broker::get_if<broker::vector>(&data);
-	if ( ! d )
+	if ( ! data.IsList() )
+		return false;
+	auto d = data.ToList();
+
+	if ( d.Size() != 2 || ! d[0].IsBool() || ! d[1].IsString() )
 		return false;
 
-	auto valid = broker::get_if<bool>(&(*d)[0]);
-	if ( ! valid )
-		return false;
-
-	if ( ! *valid )
+	if ( ! d[0].IsBool() )
 		{
 		assert(! IsValid()); // default set by ctor
 		return true;
 		}
 
-	if ( (*d).size() != 2 )
-		return false;
-
-	auto s = broker::get_if<std::string>(&(*d)[1]);
-	if ( ! s )
-		return false;
+	auto s = d[1].ToString();
 
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
-	if ( sizeof(MD5_CTX) != s->size() )
+	if ( sizeof(MD5_CTX) != s.size() )
 #else
-	if ( sizeof(ctx) != s->size() )
+	if ( sizeof(ctx) != s.size() )
 #endif
 		return false;
 
 	Init();
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
 	MD5_CTX* md = (MD5_CTX*)EVP_MD_CTX_md_data(ctx);
-	memcpy(md, s->data(), s->size());
+	memcpy(md, s.data(), s.size());
 #else
-	memcpy(&ctx, s->data(), s->size());
+	memcpy(&ctx, s.data(), s.size());
 #endif
 	return true;
 	}
@@ -444,10 +453,15 @@ StringValPtr SHA1Val::DoGet()
 
 IMPLEMENT_OPAQUE_VALUE(SHA1Val)
 
-broker::expected<broker::data> SHA1Val::DoSerialize() const
+std::optional<BrokerData> SHA1Val::DoSerialize() const
 	{
+	BrokerListBuilder builder;
+
 	if ( ! IsValid() )
-		return {broker::vector{false}};
+		{
+		builder.Add(false);
+		return {std::move(builder).Build()};
+		}
 
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
 	SHA_CTX* md = (SHA_CTX*)EVP_MD_CTX_md_data(ctx);
@@ -456,47 +470,42 @@ broker::expected<broker::data> SHA1Val::DoSerialize() const
 	auto data = std::string(reinterpret_cast<const char*>(&ctx), sizeof(ctx));
 #endif
 
-	broker::vector d = {true, data};
-
-	return {std::move(d)};
+	builder.Add(true);
+	builder.Add(std::move(data));
+	return {std::move(builder).Build()};
 	}
 
-bool SHA1Val::DoUnserialize(const broker::data& data)
+bool SHA1Val::DoUnserialize(BrokerDataView data)
 	{
-	auto d = broker::get_if<broker::vector>(&data);
-	if ( ! d )
+	if ( ! data.IsList() )
 		return false;
 
-	auto valid = broker::get_if<bool>(&(*d)[0]);
-	if ( ! valid )
+	auto d = data.ToList();
+
+	if ( d.Size() != 2 || ! d[0].IsBool() || ! d[1].IsString() )
 		return false;
 
-	if ( ! *valid )
+	if ( ! d[0].ToBool() )
 		{
 		assert(! IsValid()); // default set by ctor
 		return true;
 		}
 
-	if ( (*d).size() != 2 )
-		return false;
-
-	auto s = broker::get_if<std::string>(&(*d)[1]);
-	if ( ! s )
-		return false;
+	auto s = d[1].ToString();
 
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
-	if ( sizeof(SHA_CTX) != s->size() )
+	if ( sizeof(SHA_CTX) != s.size() )
 #else
-	if ( sizeof(ctx) != s->size() )
+	if ( sizeof(ctx) != s.size() )
 #endif
 		return false;
 
 	Init();
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
 	SHA_CTX* md = (SHA_CTX*)EVP_MD_CTX_md_data(ctx);
-	memcpy(md, s->data(), s->size());
+	memcpy(md, s.data(), s.size());
 #else
-	memcpy(&ctx, s->data(), s->size());
+	memcpy(&ctx, s.data(), s.size());
 #endif
 	return true;
 	}
@@ -573,10 +582,15 @@ StringValPtr SHA256Val::DoGet()
 
 IMPLEMENT_OPAQUE_VALUE(SHA256Val)
 
-broker::expected<broker::data> SHA256Val::DoSerialize() const
+std::optional<BrokerData> SHA256Val::DoSerialize() const
 	{
+	BrokerListBuilder builder;
+
 	if ( ! IsValid() )
-		return {broker::vector{false}};
+		{
+		builder.Add(false);
+		return {std::move(builder).Build()};
+		}
 
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
 	SHA256_CTX* md = (SHA256_CTX*)EVP_MD_CTX_md_data(ctx);
@@ -585,47 +599,42 @@ broker::expected<broker::data> SHA256Val::DoSerialize() const
 	auto data = std::string(reinterpret_cast<const char*>(&ctx), sizeof(ctx));
 #endif
 
-	broker::vector d = {true, data};
-
-	return {std::move(d)};
+	builder.Add(true);
+	builder.Add(std::move(data));
+	return {std::move(builder).Build()};
 	}
 
-bool SHA256Val::DoUnserialize(const broker::data& data)
+bool SHA256Val::DoUnserialize(BrokerDataView data)
 	{
-	auto d = broker::get_if<broker::vector>(&data);
-	if ( ! d )
+	if ( ! data.IsList() )
 		return false;
 
-	auto valid = broker::get_if<bool>(&(*d)[0]);
-	if ( ! valid )
+	auto d = data.ToList();
+
+	if ( d.Size() != 2 || ! d[0].IsBool() || ! d[1].IsString() )
 		return false;
 
-	if ( ! *valid )
+	if ( ! d[0].ToBool() )
 		{
 		assert(! IsValid()); // default set by ctor
 		return true;
 		}
 
-	if ( (*d).size() != 2 )
-		return false;
-
-	auto s = broker::get_if<std::string>(&(*d)[1]);
-	if ( ! s )
-		return false;
+	auto s = d[1].ToString();
 
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
-	if ( sizeof(SHA256_CTX) != s->size() )
+	if ( sizeof(SHA256_CTX) != s.size() )
 #else
-	if ( sizeof(ctx) != s->size() )
+	if ( sizeof(ctx) != s.size() )
 #endif
 		return false;
 
 	Init();
 #if ( OPENSSL_VERSION_NUMBER < 0x30000000L ) || defined(LIBRESSL_VERSION_NUMBER)
 	SHA256_CTX* md = (SHA256_CTX*)EVP_MD_CTX_md_data(ctx);
-	memcpy(md, s->data(), s->size());
+	memcpy(md, s.data(), s.size());
 #else
-	memcpy(&ctx, s->data(), s->size());
+	memcpy(&ctx, s.data(), s.size());
 #endif
 	return true;
 	}
@@ -647,73 +656,83 @@ bool EntropyVal::Get(double* r_ent, double* r_chisq, double* r_mean, double* r_m
 
 IMPLEMENT_OPAQUE_VALUE(EntropyVal)
 
-broker::expected<broker::data> EntropyVal::DoSerialize() const
+std::optional<BrokerData> EntropyVal::DoSerialize() const
 	{
-	broker::vector d = {
-		static_cast<uint64_t>(state.totalc),   static_cast<uint64_t>(state.mp),
-		static_cast<uint64_t>(state.sccfirst), static_cast<uint64_t>(state.inmont),
-		static_cast<uint64_t>(state.mcount),   static_cast<uint64_t>(state.cexp),
-		static_cast<uint64_t>(state.montex),   static_cast<uint64_t>(state.montey),
-		static_cast<uint64_t>(state.montepi),  static_cast<uint64_t>(state.sccu0),
-		static_cast<uint64_t>(state.scclast),  static_cast<uint64_t>(state.scct1),
-		static_cast<uint64_t>(state.scct2),    static_cast<uint64_t>(state.scct3),
-	};
+	BrokerListBuilder builder;
 
-	d.reserve(256 + 3 + RT_MONTEN + 11);
+	builder.Reserve(256 + 3 + RT_MONTEN + 11);
 
-	for ( int i = 0; i < 256; ++i )
-		d.emplace_back(static_cast<uint64_t>(state.ccount[i]));
+	builder.Add(static_cast<uint64_t>(state.totalc));
+	builder.Add(static_cast<uint64_t>(state.mp));
+	builder.Add(static_cast<uint64_t>(state.sccfirst));
+	builder.Add(static_cast<uint64_t>(state.inmont));
+	builder.Add(static_cast<uint64_t>(state.mcount));
+	builder.Add(static_cast<uint64_t>(state.cexp));
+	builder.Add(static_cast<uint64_t>(state.montex));
+	builder.Add(static_cast<uint64_t>(state.montey));
+	builder.Add(static_cast<uint64_t>(state.montepi));
+	builder.Add(static_cast<uint64_t>(state.sccu0));
+	builder.Add(static_cast<uint64_t>(state.scclast));
+	builder.Add(static_cast<uint64_t>(state.scct1));
+	builder.Add(static_cast<uint64_t>(state.scct2));
+	builder.Add(static_cast<uint64_t>(state.scct3));
 
-	for ( int i = 0; i < RT_MONTEN; ++i )
-		d.emplace_back(static_cast<uint64_t>(state.monte[i]));
+	for ( auto bin : state.ccount )
+		builder.Add(static_cast<uint64_t>(bin));
 
-	return {std::move(d)};
+	for ( auto val : state.monte )
+		builder.Add(static_cast<uint64_t>(val));
+
+	return {std::move(builder).Build()};
 	}
 
-bool EntropyVal::DoUnserialize(const broker::data& data)
+bool EntropyVal::DoUnserialize(BrokerDataView data)
 	{
-	auto d = broker::get_if<broker::vector>(&data);
-	if ( ! d )
+	if ( ! data.IsList() )
 		return false;
 
-	if ( ! get_vector_idx<uint64_t>(*d, 0, &state.totalc) )
+	auto d = data.ToList();
+
+	if ( ! get_vector_idx(d, 0, &state.totalc) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 1, &state.mp) )
+	if ( ! get_vector_idx(d, 1, &state.mp) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 2, &state.sccfirst) )
+	if ( ! get_vector_idx(d, 2, &state.sccfirst) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 3, &state.inmont) )
+	if ( ! get_vector_idx(d, 3, &state.inmont) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 4, &state.mcount) )
+	if ( ! get_vector_idx(d, 4, &state.mcount) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 5, &state.cexp) )
+	if ( ! get_vector_idx(d, 5, &state.cexp) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 6, &state.montex) )
+	if ( ! get_vector_idx(d, 6, &state.montex) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 7, &state.montey) )
+	if ( ! get_vector_idx(d, 7, &state.montey) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 8, &state.montepi) )
+	if ( ! get_vector_idx(d, 8, &state.montepi) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 9, &state.sccu0) )
+	if ( ! get_vector_idx(d, 9, &state.sccu0) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 10, &state.scclast) )
+	if ( ! get_vector_idx(d, 10, &state.scclast) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 11, &state.scct1) )
+	if ( ! get_vector_idx(d, 11, &state.scct1) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 12, &state.scct2) )
+	if ( ! get_vector_idx(d, 12, &state.scct2) )
 		return false;
-	if ( ! get_vector_idx<uint64_t>(*d, 13, &state.scct3) )
+	if ( ! get_vector_idx(d, 13, &state.scct3) )
 		return false;
 
-	for ( int i = 0; i < 256; ++i )
+	size_t index = 14;
+
+	for ( auto& bin : state.ccount )
 		{
-		if ( ! get_vector_idx<uint64_t>(*d, 14 + i, &state.ccount[i]) )
+		if ( ! get_vector_idx(d, index++, &bin) )
 			return false;
 		}
 
-	for ( int i = 0; i < RT_MONTEN; ++i )
+	for ( auto& val : state.monte )
 		{
-		if ( ! get_vector_idx<uint64_t>(*d, 14 + 256 + i, &state.monte[i]) )
+		if ( ! get_vector_idx(d, index++, &val) )
 			return false;
 		}
 
@@ -874,46 +893,48 @@ BloomFilterVal::~BloomFilterVal()
 
 IMPLEMENT_OPAQUE_VALUE(BloomFilterVal)
 
-broker::expected<broker::data> BloomFilterVal::DoSerialize() const
+std::optional<BrokerData> BloomFilterVal::DoSerialize() const
 	{
-	broker::vector d;
+	BrokerListBuilder builder;
 
 	if ( type )
 		{
 		auto t = SerializeType(type);
 		if ( ! t )
-			return broker::ec::invalid_data;
+			return std::nullopt;
 
-		d.emplace_back(std::move(*t));
+		builder.Add(std::move(*t));
 		}
 	else
-		d.emplace_back(broker::none());
+		builder.AddNil();
 
 	auto bf = bloom_filter->Serialize();
 	if ( ! bf )
-		return broker::ec::invalid_data; // Cannot serialize;
+		return std::nullopt; // Cannot serialize;
 
-	d.emplace_back(*bf);
-	return {std::move(d)};
+	builder.Add(std::move(*bf));
+	return {std::move(builder).Build()};
 	}
 
-bool BloomFilterVal::DoUnserialize(const broker::data& data)
+bool BloomFilterVal::DoUnserialize(BrokerDataView data)
 	{
-	auto v = broker::get_if<broker::vector>(&data);
-
-	if ( ! (v && v->size() == 2) )
+	if ( ! data.IsList() )
 		return false;
 
-	auto no_type = broker::get_if<broker::none>(&(*v)[0]);
-	if ( ! no_type )
+	auto v = data.ToList();
+
+	if ( v.Size() != 2 )
+		return false;
+
+	if ( ! v[0].IsNil() )
 		{
-		auto t = UnserializeType((*v)[0]);
+		auto t = UnserializeType(v[0]);
 
 		if ( ! (t && Typify(std::move(t))) )
 			return false;
 		}
 
-	auto bf = probabilistic::BloomFilter::Unserialize((*v)[1]);
+	auto bf = probabilistic::BloomFilter::Unserialize(v[1]);
 	if ( ! bf )
 		return false;
 
@@ -968,46 +989,49 @@ void CardinalityVal::Add(const Val* val)
 
 IMPLEMENT_OPAQUE_VALUE(CardinalityVal)
 
-broker::expected<broker::data> CardinalityVal::DoSerialize() const
+std::optional<BrokerData> CardinalityVal::DoSerialize() const
 	{
-	broker::vector d;
+	BrokerListBuilder builder;
+	builder.Reserve(2);
 
 	if ( type )
 		{
 		auto t = SerializeType(type);
 		if ( ! t )
-			return broker::ec::invalid_data;
+			return std::nullopt;
 
-		d.emplace_back(std::move(*t));
+		builder.Add(std::move(*t));
 		}
 	else
-		d.emplace_back(broker::none());
+		builder.AddNil();
 
 	auto cs = c->Serialize();
 	if ( ! cs )
-		return broker::ec::invalid_data;
+		return std::nullopt;
 
-	d.emplace_back(*cs);
-	return {std::move(d)};
+	builder.Add(*cs);
+	return {std::move(builder).Build()};
 	}
 
-bool CardinalityVal::DoUnserialize(const broker::data& data)
+bool CardinalityVal::DoUnserialize(BrokerDataView data)
 	{
-	auto v = broker::get_if<broker::vector>(&data);
-
-	if ( ! (v && v->size() == 2) )
+	if ( ! data.IsList() )
 		return false;
 
-	auto no_type = broker::get_if<broker::none>(&(*v)[0]);
-	if ( ! no_type )
+	auto v = data.ToList();
+
+	if ( v.Size() != 2 )
+		return false;
+
+	if ( ! v[0].IsNil() )
 		{
-		auto t = UnserializeType((*v)[0]);
+		auto t = UnserializeType(v[0]);
 
 		if ( ! (t && Typify(std::move(t))) )
 			return false;
 		}
 
-	auto cu = probabilistic::detail::CardinalityCounter::Unserialize((*v)[1]);
+	auto cu = probabilistic::detail::CardinalityCounter::Unserialize(v[1]);
 	if ( ! cu )
 		return false;
 
@@ -1039,27 +1063,29 @@ bool ParaglobVal::operator==(const ParaglobVal& other) const
 
 IMPLEMENT_OPAQUE_VALUE(ParaglobVal)
 
-broker::expected<broker::data> ParaglobVal::DoSerialize() const
+std::optional<BrokerData> ParaglobVal::DoSerialize() const
 	{
-	broker::vector d;
 	std::unique_ptr<std::vector<uint8_t>> iv = this->internal_paraglob->serialize();
-	for ( uint8_t a : *(iv.get()) )
-		d.emplace_back(static_cast<uint64_t>(a));
-	return {std::move(d)};
+	BrokerListBuilder builder;
+	builder.Reserve(iv->size());
+	for ( uint8_t a : *iv )
+		builder.AddCount(a);
+	return {std::move(builder).Build()};
 	}
 
-bool ParaglobVal::DoUnserialize(const broker::data& data)
+bool ParaglobVal::DoUnserialize(BrokerDataView data)
 	{
-	auto d = broker::get_if<broker::vector>(&data);
-	if ( ! d )
+	if ( ! data.IsList() )
 		return false;
 
-	std::unique_ptr<std::vector<uint8_t>> iv(new std::vector<uint8_t>);
-	iv->resize(d->size());
+	auto d = data.ToList();
 
-	for ( std::vector<broker::data>::size_type i = 0; i < d->size(); ++i )
+	auto iv = std::make_unique<std::vector<uint8_t>>();
+	iv->resize(d.Size());
+
+	for ( size_t i = 0; i < d.Size(); ++i )
 		{
-		if ( ! get_vector_idx<uint64_t>(*d, i, iv.get()->data() + i) )
+		if ( ! get_vector_idx(d, i, iv->data() + i) )
 			return false;
 		}
 
@@ -1100,12 +1126,12 @@ ValPtr ParaglobVal::DoClone(CloneState* state)
 		}
 	}
 
-broker::expected<broker::data> TelemetryVal::DoSerialize() const
+std::optional<BrokerData> TelemetryVal::DoSerialize() const
 	{
-	return broker::make_error(broker::ec::invalid_data, "cannot serialize metric handles");
+	return std::nullopt;
 	}
 
-bool TelemetryVal::DoUnserialize(const broker::data&)
+bool TelemetryVal::DoUnserialize(BrokerDataView)
 	{
 	return false;
 	}
