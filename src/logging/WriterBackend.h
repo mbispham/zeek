@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <broker/config.hh>
+
 #include "zeek/logging/Component.h"
 #include "zeek/threading/MsgThread.h"
 
 namespace broker
 	{
 class data;
+class variant;
 	}
 
 namespace zeek::logging
@@ -129,6 +132,9 @@ public:
 		// fields. They serialize/deserialize the struct.
 		broker::data ToBroker() const;
 		bool FromBroker(broker::data d);
+#ifdef BROKER_HAS_VARIANT
+		bool FromBroker(const broker::variant& d);
+#endif
 
 	private:
 		const WriterInfo& operator=(const WriterInfo& other); // Disable.

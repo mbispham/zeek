@@ -2,6 +2,7 @@
 
 #include <broker/backend.hh>
 #include <broker/backend_options.hh>
+#include <broker/config.hh>
 #include <broker/data.hh>
 #include <broker/detail/hash.hh>
 #include <broker/endpoint.hh>
@@ -432,35 +433,44 @@ public:
 	void SetMetricsExportPrefixes(std::vector<std::string> filter);
 
 private:
+#ifdef BROKER_HAS_VARIANT
+  using NativeBrokerValue = broker::variant;
+#else
+  using NativeBrokerValue = broker::data;
+#endif
+
 	// Process events used for Broker store backed zeek tables
-	void ProcessStoreEvent(broker::data msg);
-	// Common functionality for processing insert and update events.
-	void ProcessStoreEventInsertUpdate(const TableValPtr& table, const std::string& store_id,
-	                                   const broker::data& key, const broker::data& data,
-	                                   const broker::data& old_value, bool insert);
-	void ProcessMessage(std::string_view topic, broker::zeek::Batch& ev);
-	void ProcessMessage(std::string_view topic, broker::zeek::Event& ev);
-	void ProcessMessage(std::string_view topic, broker::zeek::Invalid& ev);
-	bool ProcessMessage(std::string_view topic, broker::zeek::LogCreate& lc);
-	bool ProcessMessage(std::string_view topic, broker::zeek::LogWrite& lw);
-	bool ProcessMessage(std::string_view topic, broker::zeek::IdentifierUpdate& iu);
-	void ProcessStatus(broker::status_view stat);
-	void ProcessError(broker::error_view err);
-	void ProcessStoreResponse(detail::StoreHandleVal*, broker::store::response response);
-	void FlushPendingQueries();
-	// Initializes the masters for Broker backed Zeek tables when using the &backend attribute
-	void InitializeBrokerStoreForwarding();
-	// Check if a Broker store is associated to a table on the Zeek side.
-	void PrepareForwarding(const std::string& name);
-	// Send the content of a Broker store to the backing table. This is typically used
-	// when a master/clone is created.
-	void BrokerStoreToZeekTable(const std::string& name, const detail::StoreHandleVal* handle);
+  void ProcessStoreEvent(broker::data msg);
+  // Common functionality for processing insert and update events.
+  void ProcessStoreEventInsertUpdate(const TableValPtr& table, const std::string& store_id,
+	                                 const broker::data& key, const broker::data& data,
+	                                 const broker::data& old_value, bool insert);
+  void ProcessMessage(std::string_view topic, broker::zeek::Batch& ev);
+  void ProcessMessage(std::string_view topic, broker::zeek::Event& ev);
+  void ProcessMessage(std::string_view topic, broker::zeek::Invalid& ev);
+  bool ProcessMessage(std::string_view topic, broker::zeek::LogCreate& lc);
+  bool ProcessMessage(std::string_view topic, broker::zeek::LogWrite& lw);
+  bool ProcessMessage(std::string_view topic, broker::zeek::IdentifierUpdate& iu);
+  void ProcessStatus(const broker::status& stat);
+  void ProcessError(const broker::error& err);
+  void ProcessStoreResponse(detail::StoreHandleVal*, broker::store::response response);
+  void FlushPendingQueries();
+  // Initializes the masters for Broker backed Zeek tables when using the &backend attribute
+  void InitializeBrokerStoreForwarding();
+  // Check if a Broker store is associated to a table on the Zeek side.
+  void PrepareForwarding(const std::string& name);
+  // Send the content of a Broker store to the backing table. This is typically used
+  // when a master/clone is created.
+  void BrokerStoreToZeekTable(const std::string& name, const detail::StoreHandleVal* handle);
 
-	void Error(const char* format, ...) __attribute__((format(printf, 2, 3)));
+  void Error(const char* format, ...) __attribute__((format(printf, 2, 3)));
 
-	// IOSource interface overrides:
-	void Process() override;
-	const char* Tag() override { return "Broker::Manager"; }
+  // IOSource interface overrides:
+  void Process() override;
+  const char* Tag() override
+	  {
+	  return "Broker::Manager";
+	  }
 	double GetNextTimeout() override { return -1; }
 
 	struct LogBuffer

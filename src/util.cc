@@ -1151,14 +1151,20 @@ std::string get_escaped_string(const char* str, size_t len, bool escape_all)
 	return get_escaped_string(&d, str, len, escape_all)->Description();
 	}
 
-char* copy_string(const char* s)
+char* copy_string(const char* str, size_t len)
 	{
-	if ( ! s )
+	if ( ! str )
 		return nullptr;
 
-	char* c = new char[strlen(s) + 1];
-	strcpy(c, s);
-	return c;
+	char* res = new char[len + 1];
+	memcpy(res, str, len);
+	res[len] = '\0';
+	return res;
+	}
+
+char* copy_string(const char* s)
+	{
+	return copy_string(s, strlen(s));
 	}
 
 TEST_CASE("util streq")

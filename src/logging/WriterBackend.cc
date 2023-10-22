@@ -9,6 +9,13 @@
 #include "zeek/threading/SerialTypes.h"
 #include "zeek/util.h"
 
+#ifdef BROKER_HAS_VARIANT
+#include <broker/variant.hh>
+#include <broker/variant_list.hh>
+#include <broker/variant_set.hh>
+#include <broker/variant_table.hh>
+#endif
+
 // Messages sent from backend to frontend (i.e., "OutputMessages").
 
 using zeek::threading::Field;
@@ -134,6 +141,63 @@ bool WriterBackend::WriterInfo::FromBroker(broker::data d)
 
 	return true;
 	}
+
+#ifdef BROKER_HAS_VARIANT
+
+bool WriterBackend::WriterInfo::FromBroker(const broker::variant& d)
+	{
+	if ( ! d.is_list() )
+		return false;
+
+	auto v = d.to_list();
+
+	if ( v.size() < 6 )
+		return false;
+
+	auto [vbpath, vbrot_base, vbrot_interval, vbnetwork_time, vbconfig, vbppf] = v.take<6>();
+
+	if ( ! vbpath.is_string() || ! vbrot_base.is_real() || ! vbrot_interval.is_real() ||
+	     ! vbnetwork_time.is_real() || ! vbconfig.is_table() || ! vbppf.is_string() )
+		return false;
+
+	auto bpath = vbpath.to_string();
+	auto brotation_base = vbrot_base.to_real();
+	auto brotation_interval = vbrot_interval.to_real();
+	auto bnetwork_time = vbnetwork_time.to_real();
+	auto bconfig = vbconfig.to_table();
+	auto bppf = vbppf.to_string();
+
+	path = util::copy_string(bpath.data(), bpath.size());
+	post_proc_func = util::copy_string(bppf.data(), bppf.size());
+	rotation_base = brotation_base;
+	rotation_interval = brotation_interval;
+	network_time = bnetwork_time;
+
+	for ( const auto& [key, val] : bconfig )
+		{
+		if ( ! key.is_string() || ! val.is_string() )
+			return false;
+
+		auto key_str = key.to_string();
+		auto val_str = val.to_string();
+
+		auto key_copy = util::copy_string(key_str.data(), key_str.size());
+		auto val_copy = util::copy_string(val_str.data(), val_str.size());
+
+		auto [pos, added] = config.emplace(key_copy, val_copy); // Ownership transfer.
+		if ( ! added )
+			{
+			// Make sure we don't leak the copies and abort.
+			delete[] key_copy;
+			delete[] val_copy;
+			return false;
+			}
+		}
+
+	return true;
+	}
+
+#endif
 
 WriterBackend::WriterBackend(WriterFrontend* arg_frontend) : MsgThread()
 	{
