@@ -47,9 +47,6 @@ RecordValPtr MetricFamily::GetMetricOptsRecord() const {
 
     record_val->Assign(metric_type_idx, zeek::BifType::Enum::Telemetry::MetricType->GetEnumVal(MetricType()));
 
-    // Add anything else that child classes might need.
-    AddAdditionalOpts();
-
     return record_val;
 }
 
@@ -72,14 +69,6 @@ bool MetricAttributeIterable::ForEachKeyValue(
     }
 
     return true;
-}
-
-std::vector<std::string> MetricAttributeIterable::Labels() const {
-    auto get_value = [](const auto& label) { return label.second; };
-
-    std::vector<std::string> v;
-    std::transform(attributes.begin(), attributes.end(), std::back_inserter(v), get_value);
-    return v;
 }
 
 } // namespace zeek::telemetry
