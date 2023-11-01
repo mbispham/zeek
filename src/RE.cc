@@ -194,7 +194,7 @@ bool Specific_RE_Matcher::MatchAll(const String* s) {
     return MatchAll(s->Bytes(), s->Len());
 }
 
-bool Specific_RE_Matcher::MatchSet(const String* s, int_list& matches) {
+bool Specific_RE_Matcher::MatchSet(const String* s, std::vector<AcceptIdx>& matches) {
     return MatchAll(s->Bytes(), s->Len(), &matches);
 }
 
@@ -206,7 +206,7 @@ int Specific_RE_Matcher::LongestMatch(const char* s) { return LongestMatch((cons
 
 int Specific_RE_Matcher::LongestMatch(const String* s) { return LongestMatch(s->Bytes(), s->Len()); }
 
-bool Specific_RE_Matcher::MatchAll(const u_char* bv, int n, int_list* matches) {
+bool Specific_RE_Matcher::MatchAll(const u_char* bv, int n, std::vector<AcceptIdx>* matches) {
     if ( ! dfa )
         // An empty pattern matches "all" iff what's being
         // matched is empty.

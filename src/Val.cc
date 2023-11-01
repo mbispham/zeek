@@ -1464,7 +1464,7 @@ VectorValPtr detail::TablePatternMatcher::Lookup(const StringValPtr& s) {
         Build();
     }
 
-    std::vector<long int> matches;
+    std::vector<AcceptIdx> matches;
     matcher->MatchSet(s->AsString(), matches);
 
     for ( auto m : matches )

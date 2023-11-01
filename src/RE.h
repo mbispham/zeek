@@ -99,7 +99,7 @@ public:
     // For use with CompileSet() to collect indices of all matched
     // expressions into the matches vector. Behaves as MatchAll(),
     // consuming the complete input string.
-    bool MatchSet(const String* s, int_list& matches);
+    bool MatchSet(const String* s, std::vector<AcceptIdx>& matches);
 
     // Returns the position in s just beyond where the first match
     // occurs, or 0 if there is no such position in s.  Note that
@@ -130,7 +130,7 @@ protected:
     // appending to an existing pattern_text.
     void AddPat(const char* pat, const char* orig_fmt, const char* app_fmt);
 
-    bool MatchAll(const u_char* bv, int n, int_list* matches = nullptr);
+    bool MatchAll(const u_char* bv, int n, std::vector<AcceptIdx>* matches = nullptr);
 
     match_type mt;
     bool multiline;
