@@ -45,9 +45,9 @@ public:
     std::string_view Name() const noexcept { return name; }
 
     /**
-     * @return A version of the name with the prefix attached
+     * @return The complete name for the family including prefix and unit.
      */
-    std::string PrefixedName() const noexcept { return prefixed_name; }
+    std::string FullName() const noexcept { return full_name; }
 
     /**
      * @return The names for all label dimensions.
@@ -98,7 +98,7 @@ protected:
 
     std::string prefix;
     std::string name;
-    std::string prefixed_name;
+    std::string full_name;
     std::vector<std::string> labels;
     std::string helptext;
     std::string unit;

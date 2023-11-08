@@ -184,7 +184,7 @@ ValPtr Manager::CollectMetrics(std::string_view prefix_pattern, std::string_view
     std::map<std::string, std::shared_ptr<MetricFamily>> matched_families;
     for ( const auto& family : families ) {
         if ( family->Matches(prefix_pattern, name_pattern) )
-            matched_families.insert({family->PrefixedName(), family});
+            matched_families.insert({family->FullName(), family});
     }
 
     if ( matched_families.empty() )
@@ -280,7 +280,7 @@ ValPtr Manager::CollectHistogramMetrics(std::string_view prefix_pattern, std::st
     std::map<std::string, std::shared_ptr<MetricFamily>> matched_families;
     for ( const auto& family : families ) {
         if ( family->Matches(prefix_pattern, name_pattern) )
-            matched_families.insert({family->PrefixedName(), family});
+            matched_families.insert({family->FullName(), family});
     }
 
     if ( matched_families.empty() )

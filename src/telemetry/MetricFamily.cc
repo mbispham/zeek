@@ -13,7 +13,11 @@ MetricFamily::MetricFamily(std::string_view prefix, std::string_view name, Span<
     for ( const auto& lbl : lbls )
         labels.emplace_back(std::string{lbl});
 
-    prefixed_name = util::fmt("%s-%s", prefix.data(), name.data());
+    full_name = util::fmt("%s_%s", prefix.data(), name.data());
+    if ( unit != "1" )
+        full_name.append("_").append(unit);
+    if ( is_sum )
+        full_name.append("_total");
 }
 
 RecordValPtr MetricFamily::GetMetricOptsRecord() const {

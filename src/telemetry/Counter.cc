@@ -12,21 +12,20 @@ IntCounterFamily::IntCounterFamily(std::string_view prefix, std::string_view nam
     : BaseCounterFamily(prefix, name, labels, helptext, unit, is_sum) {
     auto p = opentelemetry::metrics::Provider::GetMeterProvider();
     auto m = p->GetMeter(std::string{prefix});
-    auto counter_name = std::string{prefix} + "-" + std::string{name};
 
     opentelemetry::sdk::metrics::InstrumentType type;
     if ( ! callback ) {
-        instrument = m->CreateUInt64Counter(counter_name, std::string{helptext}, std::string{unit});
+        instrument = m->CreateUInt64Counter(FullName(), std::string{helptext});
         type = opentelemetry::sdk::metrics::InstrumentType::kCounter;
     }
     else {
-        observable = m->CreateInt64ObservableCounter(counter_name, std::string{helptext}, std::string{unit});
+        observable = m->CreateInt64ObservableCounter(FullName(), std::string{helptext});
         observable->AddCallback(callback, nullptr);
         type = opentelemetry::sdk::metrics::InstrumentType::kObservableCounter;
     }
 
     if ( is_sum )
-        telemetry_mgr->AddView(counter_name, std::string{helptext}, std::string{unit}, type,
+        telemetry_mgr->AddView(FullName(), std::string{helptext}, "", type,
                                opentelemetry::sdk::metrics::AggregationType::kSum);
 }
 
@@ -36,20 +35,19 @@ DblCounterFamily::DblCounterFamily(std::string_view prefix, std::string_view nam
     : BaseCounterFamily(prefix, name, labels, helptext, unit, is_sum) {
     auto p = opentelemetry::metrics::Provider::GetMeterProvider();
     auto m = p->GetMeter(std::string{prefix});
-    auto counter_name = std::string{prefix} + "-" + std::string{name};
 
     opentelemetry::sdk::metrics::InstrumentType type;
     if ( ! callback ) {
-        instrument = m->CreateDoubleCounter(counter_name, std::string{helptext}, std::string{unit});
+        instrument = m->CreateDoubleCounter(FullName(), std::string{helptext});
         type = opentelemetry::sdk::metrics::InstrumentType::kCounter;
     }
     else {
-        observable = m->CreateDoubleObservableCounter(counter_name, std::string{helptext}, std::string{unit});
+        observable = m->CreateDoubleObservableCounter(FullName(), std::string{helptext});
         observable->AddCallback(callback, nullptr);
         type = opentelemetry::sdk::metrics::InstrumentType::kObservableCounter;
     }
 
     if ( is_sum )
-        telemetry_mgr->AddView(counter_name, std::string{helptext}, std::string{unit}, type,
+        telemetry_mgr->AddView(FullName(), std::string{helptext}, "", type,
                                opentelemetry::sdk::metrics::AggregationType::kSum);
 }
