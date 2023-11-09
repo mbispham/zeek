@@ -5803,7 +5803,11 @@ function have_spicy_analyzers%(%) : bool
 ##
 ## This returns a MatcherStats objects that can be used for introspection
 ## of the DFA used for such a table. Statistics reset whenever elements are
-## added or removed as these operations result in the DFA being reset.
+## added or removed to the table as these operations result in the matcher
+## being rebuilt.
+##
+## This function iterates over all states of the DFA. Calling it at a very
+## high frequency is likely detrimental to performance.
 ##
 ## tbl: The table to get stats for.
 ##
