@@ -21,6 +21,7 @@ RUN zypper refresh \
     gcc-c++ \
     git \
     gzip \
+    libcurl-devel \
     libopenssl-devel \
     libpcap-devel \
     make \
