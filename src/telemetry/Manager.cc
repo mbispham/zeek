@@ -9,6 +9,7 @@
 #include "zeek/3rdparty/doctest.h"
 #include "zeek/ID.h"
 #include "zeek/telemetry/OtelReader.h"
+#include "zeek/telemetry/ProcessStats.h"
 #include "zeek/telemetry/Timer.h"
 #include "zeek/telemetry/telemetry.bif.h"
 #include "zeek/zeek-version.h"
@@ -118,6 +119,9 @@ Manager::Manager()
 }
 
 Manager::~Manager() {
+    stats_thread_running = false;
+    process_stats_thread.join();
+
     std::shared_ptr<opentelemetry::metrics::MeterProvider> none;
     metrics_api::Provider::SetMeterProvider(none);
 }
@@ -155,6 +159,17 @@ void Manager::InitPostScript() {
     // This has to be stored in the family map so the instrument continues being valid.
     auto stats_family =
         CounterFamily<double>("zeek", "system-stats", {"test"}, "", "1", false, Manager::FetchSystemStats);
+
+#ifdef HAVE_PROCESS_STAT_METRICS
+
+    rss_gauge = GaugeInstance("process", "resident_memory", {}, "Resident memory size", "bytes");
+    vms_gauge = GaugeInstance("process", "virtual_memory", {}, "Virtual memory size", "bytes");
+    cpu_gauge = GaugeInstance<double>("process", "cpu", {}, "Total user and system CPU time spent", "seconds", true);
+    fds_gauge = GaugeInstance("process", "open_fds", {}, "Number of open file descriptors");
+
+    // Start a thread to collect statistics about this process.
+    process_stats_thread = std::thread(&Manager::FetchProcessStats, this);
+#endif
 }
 
 std::shared_ptr<MetricFamily> Manager::LookupFamily(std::string_view prefix, std::string_view name) const {
@@ -363,6 +378,22 @@ void Manager::FetchSystemStats(opentelemetry::metrics::ObserverResult result, vo
     values.insert({{"test", "value2"}, 5.678});
 
     build_observation(values, result);
+}
+
+void Manager::FetchProcessStats() {
+#ifdef HAVE_PROCESS_STAT_METRICS
+
+    while ( stats_thread_running ) {
+        auto stats = get_process_stats();
+
+        rss_gauge->SetValue(stats.rss);
+        vms_gauge->SetValue(stats.vms);
+        cpu_gauge->SetValue(stats.cpu);
+        fds_gauge->SetValue(stats.fds);
+
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+#endif
 }
 
 void Manager::AddView(const std::string& name, const std::string& helptext, const std::string& unit,

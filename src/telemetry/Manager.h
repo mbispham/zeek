@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <memory>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "zeek/IntrusivePtr.h"
@@ -312,6 +313,7 @@ public:
     }
 
     static void FetchSystemStats(opentelemetry::metrics::ObserverResult observer_result, void* state);
+    void FetchProcessStats();
 
     /**
      * Adds a view to the MeterProvider.
@@ -348,6 +350,13 @@ private:
 
     std::shared_ptr<OtelReader> otel_reader;
     std::vector<std::shared_ptr<MetricFamily>> families;
+
+    bool stats_thread_running = true;
+    std::thread process_stats_thread;
+    std::shared_ptr<Gauge<int64_t>> rss_gauge;
+    std::shared_ptr<Gauge<int64_t>> vms_gauge;
+    std::shared_ptr<Gauge<double>> cpu_gauge;
+    std::shared_ptr<Gauge<int64_t>> fds_gauge;
 };
 
 } // namespace zeek::telemetry
