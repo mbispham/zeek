@@ -127,7 +127,7 @@ public:
                                        std::initializer_list<LabelView> labels, std::string_view helptext,
                                        std::string_view unit = "1", bool is_sum = false) {
         auto lbl_span = Span{labels.begin(), labels.size()};
-        return CounterInstance(prefix, name, lbl_span, helptext, unit, is_sum);
+        return CounterInstance<ValueType>(prefix, name, lbl_span, helptext, unit, is_sum);
     }
 
     /**
@@ -184,21 +184,22 @@ public:
      *               only the total value is of interest.
      */
     template<class ValueType = int64_t>
-    Gauge<ValueType> GaugeInstance(std::string_view prefix, std::string_view name, Span<const LabelView> labels,
-                                   std::string_view helptext, std::string_view unit = "1", bool is_sum = false) {
+    std::shared_ptr<Gauge<ValueType>> GaugeInstance(std::string_view prefix, std::string_view name,
+                                                    Span<const LabelView> labels, std::string_view helptext,
+                                                    std::string_view unit = "1", bool is_sum = false) {
         return WithLabelNames(labels, [&, this](auto labelNames) {
             auto family = GaugeFamily<ValueType>(prefix, name, labelNames, helptext, unit, is_sum);
-            return family.getOrAdd(labels);
+            return family->GetOrAdd(labels);
         });
     }
 
     /// @copydoc GaugeInstance
     template<class ValueType = int64_t>
-    Gauge<ValueType> GaugeInstance(std::string_view prefix, std::string_view name,
-                                   std::initializer_list<LabelView> labels, std::string_view helptext,
-                                   std::string_view unit = "1", bool is_sum = false) {
+    std::shared_ptr<Gauge<ValueType>> GaugeInstance(std::string_view prefix, std::string_view name,
+                                                    std::initializer_list<LabelView> labels, std::string_view helptext,
+                                                    std::string_view unit = "1", bool is_sum = false) {
         auto lbl_span = Span{labels.begin(), labels.size()};
-        return GaugeInstance(prefix, name, lbl_span, helptext, unit, is_sum);
+        return GaugeInstance<ValueType>(prefix, name, lbl_span, helptext, unit, is_sum);
     }
 
     // Forces the compiler to use the type `Span<const T>` instead of trying to
@@ -307,7 +308,7 @@ public:
                                            ConstSpan<ValueType> default_upper_bounds, std::string_view helptext,
                                            std::string_view unit = "1", bool is_sum = false) {
         auto lbls = Span{labels.begin(), labels.size()};
-        return HistogramInstance(prefix, name, lbls, default_upper_bounds, helptext, unit, is_sum);
+        return HistogramInstance<ValueType>(prefix, name, lbls, default_upper_bounds, helptext, unit, is_sum);
     }
 
     static void FetchSystemStats(opentelemetry::metrics::ObserverResult observer_result, void* state);
@@ -321,7 +322,7 @@ public:
 
 protected:
     template<class F>
-    static void WithLabelNames(Span<const LabelView> xs, F continuation) {
+    static auto WithLabelNames(Span<const LabelView> xs, F continuation) {
         if ( xs.size() <= 10 ) {
             std::string_view buf[10];
             for ( size_t index = 0; index < xs.size(); ++index )
@@ -332,7 +333,7 @@ protected:
         else {
             std::vector<std::string_view> buf;
             for ( auto x : xs )
-                buf.emplace_back(x.first, x.second);
+                buf.emplace_back(x.first);
 
             return continuation(Span{buf});
         }
